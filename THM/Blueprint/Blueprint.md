@@ -1,4 +1,4 @@
-# Blueprint — Technical Writeup
+# Blueprint - Technical Writeup
 
 ## Overview
 
